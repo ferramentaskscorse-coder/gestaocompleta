@@ -10,7 +10,7 @@ function estadoInicial(){
     categorias: ["Geral"],                 // negócios/categorias (marcador transversal)
     config: { horasDia:8, diasMes:22 },    // base do valor da hora
     materiais: [],   // {id, nome, categoria, precoEmb, qtdEmb, unidade}
-    produtos: [],    // {id, nome, categoria, tempo, taxaCartao, taxaImposto, margem, markup, materiais:[{matId,qtd}]}
+    produtos: [],    // {id, nome, categoria, tempo, rendimento, taxaCartao, taxaImposto, margem, markup, materiais:[{matId,qtd}], pacotes:[{id,nome,qtd}]}
     clientes: [],    // {id, nome, telefone, email, cidade, status, obs, criadoEm}
     pedidos: [],     // {id, num, data, clienteId, produtoId, qtd, frete, descontoPct, forma, status:Pendente|Pago, lancId?}
     lancamentos: [], // {id, data, tipo:Receita|Despesa, fixoVar, categoria, descricao, forma, valor, status, origem, pedidoId?}
@@ -84,16 +84,22 @@ function calcProduto(p){
   const taxaCartaoPct = p.taxaCartao||0, taxaImpostoPct = p.taxaImposto||0;
   const valorCartao = (custoMat + maoObra) * taxaCartaoPct/100;  // T
   const valorImposto = (custoMat + maoObra) * taxaImpostoPct/100;// U
-  const custoTotal = custoMat + maoObra + valorCartao + valorImposto; // V
+  const custoTotal = custoMat + maoObra + valorCartao + valorImposto; // V (da receita/lote inteiro)
   const margemPct = (p.margem==null?30:p.margem);
   const valorMargem = custoTotal * margemPct/100;                // W
   const markup = p.markup||1;                                    // X
-  const preco = (custoTotal + valorMargem) * markup;             // Y = (V+W)*markup
-  const lucro = preco - custoTotal;                              // sobra acima do custo
+  const preco = (custoTotal + valorMargem) * markup;             // Y = (V+W)*markup (lote inteiro)
+  const lucro = preco - custoTotal;
+  // rendimento: quantas unidades de venda a receita/lote gera (serviço = 1)
+  const rend = Math.max(1, p.rendimento||1);
   return {
     custoMat, maoObra, valorCartao, valorImposto, custoTotal,
     margemPct, valorMargem, markup, preco, lucro, vh,
-    taxasReais: valorCartao + valorImposto
+    taxasReais: valorCartao + valorImposto,
+    rend,
+    custoUnit: custoTotal/rend,
+    precoUnit: preco/rend,
+    lucroUnit: (preco-custoTotal)/rend
   };
 }
 
@@ -120,7 +126,7 @@ function irPara(panel){
 document.querySelectorAll(".tab-btn").forEach(b=>b.addEventListener("click",()=>irPara(b.dataset.panel)));
 
 function renderPainelAtivo(panel){
-  ({painel:renderPainel, precos:renderPrecos, materiais:renderMateriais,
+  ({painel:renderPainel, precos:renderPrecos, produtos:renderProdutos, materiais:renderMateriais,
     caixa:renderCaixa, crm:renderCrm, pedidos:renderPedidos, metas:renderMetas, config:renderConfig}[panel]||(()=>{}))();
 }
 
@@ -293,20 +299,20 @@ function renderPainel(){
 function renderGrafico12m(){
   const el = $("grafico12m"); if(!el) return;
   const ag = new Date();
-  // monta os 12 meses terminando no mês atual
-  const meses = [];
+  // monta até 12 meses terminando no mês atual, mas começa no 1º mês com dados
+  const todos = [];
   for(let i=11;i>=0;i--){
     const d = new Date(ag.getFullYear(), ag.getMonth()-i, 1);
-    meses.push({ano:d.getFullYear(), mes:d.getMonth()});
+    const ano=d.getFullYear(), mes=d.getMonth();
+    const f = fluxo(x=>x.getFullYear()===ano && x.getMonth()===mes);
+    const meta = state.metas.find(x=>x.ano===ano && x.mes===mes);
+    todos.push({ano, mes, rec:f.rec, desp:f.desp, meta: meta?meta.metaReceita:0});
   }
-  const dados = meses.map(m=>{
-    const f = fluxo(d=>d.getFullYear()===m.ano && d.getMonth()===m.mes);
-    const meta = state.metas.find(x=>x.ano===m.ano && x.mes===m.mes);
-    return { ...m, rec:f.rec, desp:f.desp, meta: meta?meta.metaReceita:0 };
-  });
+  // descarta meses iniciais totalmente vazios (antes do primeiro com dados)
+  const primeiroComDado = todos.findIndex(d=>d.rec>0||d.desp>0||d.meta>0);
+  const dados = primeiroComDado<0 ? [] : todos.slice(primeiroComDado);
   const maxVal = Math.max(1, ...dados.map(d=>Math.max(d.rec, d.desp, d.meta)));
-  const temAlgo = dados.some(d=>d.rec>0||d.desp>0||d.meta>0);
-  if(!temAlgo){ el.innerHTML = `<div class="empty">Conforme você registrar despesas e pedidos pagos, o gráfico aparece aqui.</div>`; return; }
+  if(!dados.length){ el.innerHTML = `<div class="empty">Conforme você registrar despesas e pedidos pagos, o gráfico aparece aqui.</div>`; return; }
 
   const W=680, H=240, padL=8, padR=8, padT=14, padB=34;
   const plotW=W-padL-padR, plotH=H-padT-padB;
@@ -424,7 +430,7 @@ function renderPrecos(){
     <div id="listaProd"></div>`;
   $("btnNovoProd").addEventListener("click", ()=>{
     state.produtos.unshift({id:uid(),nome:"",categoria:(catAtiva!=="__all__"?catAtiva:state.categorias[0]),
-      tempo:60,taxaCartao:0,taxaImposto:0,margem:30,markup:1.5,materiais:[]});
+      tempo:60,rendimento:1,taxaCartao:0,taxaImposto:0,margem:30,markup:1.5,materiais:[],pacotes:[]});
     salvar(); pintaListaProd(); toast("Dê um nome ao novo item");
   });
   pintaListaProd();
@@ -480,6 +486,10 @@ function htmlProduto(p){
     <div class="row" style="margin-top:14px">
       <div class="field suffix-wrap"><label>Tempo</label><span class="suffix">min</span>
         <input type="number" min="0" step="5" inputmode="numeric" value="${p.tempo??""}" data-p-tempo></div>
+      <div class="field suffix-wrap"><label>Rende quantas unidades?<span class="info-tip"><button type="button" class="tip-btn" aria-label="ajuda">?</button><span class="tip-box" role="tooltip">Quantas unidades de venda essa receita/produção gera. Um serviço (ex: botox) rende 1. Uma receita de rosquinha pode render 100. O preço por unidade é o preço total ÷ rendimento.</span></span></label><span class="suffix">un</span>
+        <input type="number" min="1" step="1" inputmode="numeric" value="${p.rendimento??1}" data-p-rend></div>
+    </div>
+    <div class="row">
       <div class="field suffix-wrap"><label>Cartão</label><span class="suffix">%</span>
         <input type="number" min="0" max="50" step="0.1" inputmode="decimal" value="${p.taxaCartao??0}" data-p-cartao></div>
       <div class="field suffix-wrap"><label>Imposto</label><span class="suffix">%</span>
@@ -492,13 +502,36 @@ function htmlProduto(p){
         <input type="number" min="1" max="5" step="0.05" inputmode="decimal" value="${p.markup??1.5}" data-p-markup></div>
     </div>
     <div class="price-tag">
-      <span class="pt-label">Preço de venda</span>
-      <div class="pt-value">${brl(r.preco)}</div>
-      <div class="pt-line">Custo total: <strong style="color:#FFD58A">${brl(r.custoTotal)}</strong> · Sobra: <strong>${brl(r.preco-r.custoTotal)}</strong></div>
+      <span class="pt-label">Preço de venda${r.rend>1?" (por unidade)":""}</span>
+      <div class="pt-value">${brl(r.rend>1?r.precoUnit:r.preco)}</div>
+      <div class="pt-line">Custo${r.rend>1?"/un":""}: <strong style="color:#FFD58A">${brl(r.rend>1?r.custoUnit:r.custoTotal)}</strong> · Sobra${r.rend>1?"/un":""}: <strong>${brl(r.rend>1?r.lucroUnit:(r.preco-r.custoTotal))}</strong></div>
+      ${r.rend>1?`<div class="pt-line">A receita inteira (${r.rend} un): <strong style="color:#FFD58A">${brl(r.preco)}</strong></div>`:""}
     </div>
     ${barra}${legenda}
     ${r.vh<=0?`<div class="alert info">Dica: cadastre suas despesas na aba <b>Caixa</b> pra calcular o valor real da sua hora de trabalho.</div>`:""}
+    ${r.rend>1?htmlPacotes(p,r):""}
   </div>`;
+}
+function htmlPacotes(p, r){
+  const pacotes = p.pacotes||[];
+  const linhas = pacotes.map((pac,idx)=>{
+    const total = r.precoUnit * (pac.qtd||0);
+    return `<div class="list-item">
+      <div><div class="li-name">${esc(pac.nome)}</div><div class="li-detail">${pac.qtd} unidades × ${brl(r.precoUnit)}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="li-value">${brl(total)}</span>
+        <button class="btn-del" data-pac-del="${idx}" aria-label="Remover pacote">✕</button></div></div>`;
+  }).join("");
+  return `<details class="adv" style="margin-top:12px">
+    <summary>📦 Pacotes (vender em quantidade)</summary>
+    <p class="hint" style="margin-top:10px">Monte pacotes prontos. Ex: "Caixa 20un". O preço sai do preço por unidade acima.</p>
+    ${linhas||`<p class="hint">Nenhum pacote ainda.</p>`}
+    <div class="row" style="margin-top:8px">
+      <input type="text" data-pac-nome placeholder="Nome (ex: Caixa 20un)">
+      <div class="suffix-wrap"><span class="suffix">un</span><input type="number" min="1" step="1" data-pac-qtd placeholder="20" inputmode="numeric"></div>
+    </div>
+    <button class="btn-small" data-pac-add style="margin-top:8px">+ Salvar pacote</button>
+  </details>`;
 }
 function bindProduto(p){
   const card = document.querySelector(`[data-prod="${p.id}"]`); if(!card) return;
@@ -508,6 +541,7 @@ function bindProduto(p){
   q("[data-p-nome]").addEventListener("change",e=>{ p.nome=e.target.value.trim(); salvar(); });
   q("[data-p-cat]").addEventListener("change",e=>{ p.categoria=e.target.value; rerender(); });
   onInput("[data-p-tempo]",e=>p.tempo=num(e));
+  onInput("[data-p-rend]",e=>p.rendimento=Math.max(1,num(e)||1));
   onInput("[data-p-cartao]",e=>p.taxaCartao=num(e));
   onInput("[data-p-imposto]",e=>p.taxaImposto=num(e));
   onInput("[data-p-margem]",e=>p.margem=num(e));
@@ -525,10 +559,57 @@ function bindProduto(p){
     b.addEventListener("click",()=>{ p.materiais.splice(i,1); rerender(); }); });
   function refresh(){
     const r=calcProduto(p);
-    const v=q(".price-tag .pt-value"); if(v) v.textContent=brl(r.preco);
-    const l=q(".price-tag .pt-line"); if(l) l.innerHTML=`Custo total: <strong style="color:#FFD58A">${brl(r.custoTotal)}</strong> · Sobra: <strong>${brl(r.preco-r.custoTotal)}</strong>`;
+    const v=q(".price-tag .pt-value"); if(v) v.textContent=brl(r.rend>1?r.precoUnit:r.preco);
+    const l=q(".price-tag .pt-line"); if(l) l.innerHTML=`Custo${r.rend>1?"/un":""}: <strong style="color:#FFD58A">${brl(r.rend>1?r.custoUnit:r.custoTotal)}</strong> · Sobra${r.rend>1?"/un":""}: <strong>${brl(r.rend>1?r.lucroUnit:(r.preco-r.custoTotal))}</strong>`;
   }
+  // pacotes
+  const pacAdd=q("[data-pac-add]");
+  if(pacAdd) pacAdd.addEventListener("click",()=>{
+    const nome=q("[data-pac-nome]").value.trim();
+    const qtd=num(q("[data-pac-qtd]"));
+    if(!nome||qtd<=0){ toast("Preencha o nome e a quantidade do pacote"); return; }
+    p.pacotes=p.pacotes||[]; p.pacotes.push({id:uid(),nome,qtd});
+    rerender();
+  });
+  qa("[data-pac-del]").forEach(b=>b.addEventListener("click",()=>{
+    const i=+b.dataset.pacDel; p.pacotes.splice(i,1); rerender();
+  }));
   qa("input,select").forEach(inp=>inp.addEventListener("blur",()=>pintaListaProd()));
+}
+
+// ================= ITENS (resumo dos produtos) =================
+function renderProdutos(){
+  const el=$("panel-produtos");
+  const lista = state.produtos.filter(p=>casaCategoria(p.categoria));
+  if(!lista.length){
+    el.innerHTML = `<h2>Itens</h2><p class="sub">Resumo de todos os seus produtos e serviços.</p>
+      <div class="card"><div class="empty">Nenhum item ainda. Crie na aba <b>Preços</b>.</div></div>`;
+    return;
+  }
+  const linhas = lista.map(p=>{
+    const r = calcProduto(p);
+    const nome = p.nome || "(sem nome)";
+    const venda = r.rend>1 ? r.precoUnit : r.preco;
+    const custo = r.rend>1 ? r.custoUnit : r.custoTotal;
+    const margemReal = venda>0 ? (venda-custo)/venda*100 : 0;
+    return `<tr>
+      <td><div class="li-name">${esc(nome)}</div><div class="li-detail">${esc(p.categoria)}${r.rend>1?` · rende ${r.rend} un`:""}</div></td>
+      <td class="num">${brl(custo)}</td>
+      <td class="num"><b>${brl(venda)}</b></td>
+      <td class="num pos">${pct(margemReal)}</td>
+      <td class="num">${r.rend>1?r.rend:"—"}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `
+    <h2>Itens</h2>
+    <p class="sub">Resumo de todos os seus produtos e serviços${catAtiva!=="__all__"?` — ${esc(catAtiva)}`:""}.</p>
+    <div class="card"><div class="tabela-wrap">
+      <table class="grade">
+        <thead><tr><th>Item</th><th class="num">Custo</th><th class="num">Venda</th><th class="num">% lucro</th><th class="num">Rende</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>
+      <p class="hint" style="margin-top:10px">Custo e venda por unidade (quando o item rende várias). Edite cada item na aba Preços.</p>
+    </div></div>`;
 }
 
 // ================= CAIXA (Despesas) =================
