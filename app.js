@@ -12,9 +12,10 @@ function estadoInicial(){
     materiais: [],   // {id, nome, categoria, precoEmb, qtdEmb, unidade}
     produtos: [],    // {id, nome, categoria, tempo, taxaCartao, taxaImposto, margem, markup, materiais:[{matId,qtd}]}
     clientes: [],    // {id, nome, telefone, email, cidade, status, obs, criadoEm}
-    lancamentos: [], // {id, data, tipo:Receita|Despesa, fixoVar:Fixo|Variável, categoria, descricao, forma, valor, status, clienteId?, produtoId?}
+    pedidos: [],     // {id, num, data, clienteId, produtoId, qtd, frete, descontoPct, forma, status:Pendente|Pago, lancId?}
+    lancamentos: [], // {id, data, tipo:Receita|Despesa, fixoVar, categoria, descricao, forma, valor, status, origem, pedidoId?}
     metas: [],       // {id, ano, mes, metaReceita, metaDespesa, metaQtd}
-    proxNum: { lanc:1 }
+    proxNum: { lanc:1, pedido:1 }
   };
 }
 let state = estadoInicial();
@@ -120,7 +121,7 @@ document.querySelectorAll(".tab-btn").forEach(b=>b.addEventListener("click",()=>
 
 function renderPainelAtivo(panel){
   ({painel:renderPainel, precos:renderPrecos, materiais:renderMateriais,
-    caixa:renderCaixa, crm:renderCrm, metas:renderMetas, config:renderConfig}[panel]||(()=>{}))();
+    caixa:renderCaixa, crm:renderCrm, pedidos:renderPedidos, metas:renderMetas, config:renderConfig}[panel]||(()=>{}))();
 }
 
 // ---------- Filtro de categoria global ----------
@@ -218,10 +219,21 @@ function renderPainel(){
   const metaRec = meta?meta.metaReceita:0;
   const progPct = metaRec>0 ? Math.min(100, fMes.rec/metaRec*100) : 0;
 
-  // mais vendido no mês (por produto, via lançamentos de receita com produtoId)
-  const vendasMes = state.lancamentos.filter(l=>l.tipo==="Receita" && l.produtoId && casaCategoria(l.categoria) && mesAtual(new Date(l.data+"T12:00")));
+  // mais vendido no mês (a partir dos pedidos pagos)
+  const pedidosPagosMes = state.pedidos.filter(ped=>{
+    if(ped.status!=="Pago") return false;
+    const p=state.produtos.find(x=>x.id===ped.produtoId);
+    if(!casaCategoria(p?p.categoria:"")) return false;
+    return mesAtual(new Date(ped.data+"T12:00"));
+  });
   const cont = {};
-  vendasMesContagem(vendasMes, cont);
+  pedidosPagosMes.forEach(ped=>{
+    const c=calcPedido(ped);
+    const nome = c.p?c.p.nome:"Outro";
+    if(!cont[nome]) cont[nome]={qtd:0,valor:0};
+    cont[nome].qtd += ped.qtd||0;
+    cont[nome].valor += c.total;
+  });
   const ranking = Object.entries(cont).sort((a,b)=>b[1].valor-a[1].valor).slice(0,3);
 
   const catLabel = catAtiva==="__all__" ? "todos os negócios" : catAtiva;
@@ -262,22 +274,78 @@ function renderPainel(){
     </div>
 
     <div class="card">
+      <h3>Receita × Despesa × Meta — últimos 12 meses</h3>
+      <div id="grafico12m"></div>
+    </div>
+
+    <div class="card">
       <h3>Mais vendidos do mês</h3>
       ${ranking.length?ranking.map(([nome,info],i)=>`
         <div class="list-item">
           <div class="li-name">${["🥇","🥈","🥉"][i]||""} ${esc(nome)}</div>
-          <span class="li-value">${info.qtd}× · ${brl(info.valor)}</span>
-        </div>`).join(""):`<div class="empty">Sem vendas registradas este mês. Registre na aba Caixa (receita ligada a um produto).</div>`}
+          <span class="li-value">${info.qtd} un · ${brl(info.valor)}</span>
+        </div>`).join(""):`<div class="empty">Sem pedidos pagos este mês. Registre na aba Pedidos e marque como pago.</div>`}
     </div>`;
+  renderGrafico12m();
 }
-function vendasMesContagem(vendas, cont){
-  vendas.forEach(l=>{
-    const p = state.produtos.find(x=>x.id===l.produtoId);
-    const nome = p?p.nome:(l.descricao||"Outro");
-    if(!cont[nome]) cont[nome]={qtd:0,valor:0};
-    cont[nome].qtd += 1;
-    cont[nome].valor += l.valor||0;
+
+// gráfico de 12 meses rolando: receita x despesa x meta (SVG)
+function renderGrafico12m(){
+  const el = $("grafico12m"); if(!el) return;
+  const ag = new Date();
+  // monta os 12 meses terminando no mês atual
+  const meses = [];
+  for(let i=11;i>=0;i--){
+    const d = new Date(ag.getFullYear(), ag.getMonth()-i, 1);
+    meses.push({ano:d.getFullYear(), mes:d.getMonth()});
+  }
+  const dados = meses.map(m=>{
+    const f = fluxo(d=>d.getFullYear()===m.ano && d.getMonth()===m.mes);
+    const meta = state.metas.find(x=>x.ano===m.ano && x.mes===m.mes);
+    return { ...m, rec:f.rec, desp:f.desp, meta: meta?meta.metaReceita:0 };
   });
+  const maxVal = Math.max(1, ...dados.map(d=>Math.max(d.rec, d.desp, d.meta)));
+  const temAlgo = dados.some(d=>d.rec>0||d.desp>0||d.meta>0);
+  if(!temAlgo){ el.innerHTML = `<div class="empty">Conforme você registrar despesas e pedidos pagos, o gráfico aparece aqui.</div>`; return; }
+
+  const W=680, H=240, padL=8, padR=8, padT=14, padB=34;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const n=dados.length, slot=plotW/n, bw=Math.min(13, slot*0.28);
+  const y = v => padT + plotH*(1 - v/maxVal);
+
+  let barras="", metas="", labels="";
+  dados.forEach((d,i)=>{
+    const cx = padL + slot*i + slot/2;
+    const hRec = plotH*(d.rec/maxVal), hDesp = plotH*(d.desp/maxVal);
+    barras += `<rect x="${cx-bw-1}" y="${y(d.rec)}" width="${bw}" height="${Math.max(0,hRec)}" rx="2" fill="var(--green)"></rect>`;
+    barras += `<rect x="${cx+1}" y="${y(d.desp)}" width="${bw}" height="${Math.max(0,hDesp)}" rx="2" fill="var(--red)"></rect>`;
+    if(d.meta>0){
+      const ym=y(d.meta);
+      metas += `<line x1="${cx-bw-3}" y1="${ym}" x2="${cx+bw+3}" y2="${ym}" stroke="var(--amber)" stroke-width="2.5" stroke-linecap="round"></line>`;
+    }
+    const destaque = (d.ano===ag.getFullYear()&&d.mes===ag.getMonth());
+    labels += `<text x="${cx}" y="${H-padB+16}" text-anchor="middle" font-size="10" font-weight="${destaque?700:400}" fill="${destaque?'var(--plum)':'var(--ink-soft)'}">${MESES[d.mes]}</text>`;
+    if(destaque) labels += `<text x="${cx}" y="${H-padB+27}" text-anchor="middle" font-size="8" fill="var(--ink-soft)">${String(d.ano).slice(2)}</text>`;
+  });
+  // linhas de grade (0, meio, topo)
+  let grade="";
+  [0,0.5,1].forEach(fr=>{
+    const yy=padT+plotH*(1-fr);
+    grade += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--line)" stroke-width="1"></line>`;
+    grade += `<text x="${padL}" y="${yy-3}" font-size="8" fill="var(--ink-soft)">${brl(maxVal*fr).replace('R$','').trim()}</text>`;
+  });
+
+  el.innerHTML = `
+    <div class="legend" style="margin-bottom:8px">
+      <span><span class="dot" style="background:var(--green)"></span>Receita</span>
+      <span><span class="dot" style="background:var(--red)"></span>Despesa</span>
+      <span><span style="display:inline-block;width:14px;height:0;border-top:2.5px solid var(--amber);margin-right:5px;vertical-align:middle"></span>Meta</span>
+    </div>
+    <div style="overflow-x:auto">
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:520px;height:auto" role="img" aria-label="Gráfico de receita, despesa e meta dos últimos 12 meses">
+        ${grade}${barras}${metas}${labels}
+      </svg>
+    </div>`;
 }
 
 // ================= MATERIAIS =================
@@ -463,63 +531,46 @@ function bindProduto(p){
   qa("input,select").forEach(inp=>inp.addEventListener("blur",()=>pintaListaProd()));
 }
 
-// ================= CAIXA (Fluxo) =================
+// ================= CAIXA (Despesas) =================
 function renderCaixa(){
   const el = $("panel-caixa");
   const ag=new Date();
   const f = fluxo(d=>d.getMonth()===ag.getMonth()&&d.getFullYear()===ag.getFullYear());
-  const prodOpts = state.produtos.filter(p=>casaCategoria(p.categoria)).map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("");
-  const cliOpts = state.clientes.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join("");
   el.innerHTML = `
     <h2>Caixa</h2>
-    <p class="sub">Registre entradas e saídas. É daqui que sai o valor da sua hora e o realizado das metas.</p>
+    <p class="sub">Registre suas despesas. As receitas vêm da aba <b>Pedidos</b> (quando marcados como pagos).</p>
     <div class="dash-grid">
-      <div class="dash-card"><div class="dash-label">Entrou no mês</div><div class="dash-num" style="color:var(--green)">${brl(f.rec)}</div></div>
+      <div class="dash-card"><div class="dash-label">Entrou no mês</div><div class="dash-num" style="color:var(--green)">${brl(f.rec)}</div><div class="dash-sub">vem dos pedidos pagos</div></div>
       <div class="dash-card"><div class="dash-label">Saiu no mês</div><div class="dash-num" style="color:var(--red)">${brl(f.desp)}</div></div>
       <div class="dash-card"><div class="dash-label">Saldo</div><div class="dash-num">${brl(f.saldo)}</div></div>
     </div>
     <div class="card">
-      <h3>Novo lançamento</h3>
+      <h3>Nova despesa</h3>
       <div class="row">
-        <div class="field"><label>Tipo</label><select id="lncTipo"><option>Receita</option><option>Despesa</option></select></div>
-        <div class="field"><label>Fixo ou variável</label><select id="lncFixoVar"><option>Variável</option><option>Fixo</option></select></div>
+        <div class="field"><label>Fixo ou variável<span class="info-tip"><button type="button" class="tip-btn" aria-label="ajuda">?</button><span class="tip-box" role="tooltip">Fixo: chega todo mês igual (aluguel, internet). Variável: muda conforme o movimento (materiais, comissões).</span></span></label><select id="lncFixoVar"><option>Fixo</option><option>Variável</option></select></div>
         <div class="field"><label>Categoria / negócio</label><select id="lncCat">${opcoesCategoria(catAtiva!=="__all__"?catAtiva:state.categorias[0])}</select></div>
       </div>
       <div class="row">
-        <div class="field"><label>Descrição</label><input type="text" id="lncDesc" placeholder="Ex: Aluguel, Venda Botox"></div>
+        <div class="field"><label>Descrição</label><input type="text" id="lncDesc" placeholder="Ex: Aluguel, Luz, Materiais"></div>
         <div class="field prefix-wrap"><label>Valor</label><span class="prefix">R$</span><input type="number" id="lncValor" min="0" step="0.01" inputmode="decimal"></div>
       </div>
       <div class="row">
         <div class="field"><label>Data</label><input type="date" id="lncData" value="${hoje()}"></div>
         <div class="field"><label>Forma de pagamento</label><select id="lncForma">${FORMAS_PGTO.map(f=>`<option>${f}</option>`).join("")}</select></div>
       </div>
-      <div class="row" id="lncExtra" style="display:none">
-        <div class="field"><label>Produto (opcional)</label><select id="lncProd"><option value="">—</option>${prodOpts}</select></div>
-        <div class="field"><label>Cliente (opcional)</label><select id="lncCli"><option value="">—</option>${cliOpts}</select></div>
-      </div>
-      <button class="btn" id="btnAddLanc">Registrar</button>
+      <button class="btn" id="btnAddLanc">Registrar despesa</button>
     </div>
     <div class="card"><h3>Lançamentos do mês</h3><div id="listaLanc"></div></div>`;
-
-  const toggleExtra=()=>{ $("lncExtra").style.display = $("lncTipo").value==="Receita"?"flex":"none"; };
-  $("lncTipo").addEventListener("change", toggleExtra); toggleExtra();
-  // ao escolher produto, sugere o valor de venda
-  $("lncProd") && $("lncProd").addEventListener("change", ()=>{
-    const p = state.produtos.find(x=>x.id===$("lncProd").value);
-    if(p){ const r=calcProduto(p); if(r.preco>0) $("lncValor").value=r.preco.toFixed(2); if(!$("lncDesc").value) $("lncDesc").value=p.nome; }
-  });
   $("btnAddLanc").addEventListener("click", ()=>{
     const valor=num($("lncValor")), desc=$("lncDesc").value.trim();
     if(valor<=0){ toast("Informe o valor"); return; }
     if(!desc){ toast("Informe a descrição"); return; }
     state.lancamentos.unshift({
       id:uid(), num:state.proxNum.lanc++, data:$("lncData").value||hoje(),
-      tipo:$("lncTipo").value, fixoVar:$("lncFixoVar").value, categoria:$("lncCat").value,
-      descricao:desc, forma:$("lncForma").value, valor,
-      produtoId: $("lncProd")?$("lncProd").value||null:null,
-      clienteId: $("lncCli")?$("lncCli").value||null:null, status:"Pago"
+      tipo:"Despesa", fixoVar:$("lncFixoVar").value, categoria:$("lncCat").value,
+      descricao:desc, forma:$("lncForma").value, valor, origem:"manual", status:"Pago"
     });
-    salvar(); toast("Lançamento registrado!"); renderCaixa();
+    salvar(); toast("Despesa registrada!"); renderCaixa();
   });
   pintaListaLanc();
 }
@@ -534,18 +585,53 @@ function pintaListaLanc(){
     const d=new Date(l.data+"T12:00").toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"});
     const cor = l.tipo==="Receita"?"var(--green)":"var(--red)";
     const sinal = l.tipo==="Receita"?"+":"−";
+    const ehPedido = l.origem==="pedido";
     return `<div class="list-item">
-      <div><div class="li-name">${esc(l.descricao)}<span class="tag-cat">${esc(l.categoria)}</span></div>
-        <div class="li-detail">${d} · ${esc(l.fixoVar)} · ${esc(l.forma)}</div></div>
+      <div><div class="li-name">${esc(l.descricao)}<span class="tag-cat">${esc(l.categoria)}</span>${ehPedido?`<span class="tag-cat" style="background:var(--green-soft);color:#1d553e">pedido</span>`:""}</div>
+        <div class="li-detail">${d} · ${esc(l.fixoVar||l.tipo)} · ${esc(l.forma)}</div></div>
       <div style="display:flex;align-items:center;gap:6px">
         <span class="li-value" style="color:${cor}">${sinal}${brl(l.valor)}</span>
-        <button class="btn-del" data-del="${l.id}" aria-label="Remover">✕</button></div></div>`;
+        ${ehPedido?`<span class="btn-del" style="cursor:default;opacity:.4" title="Edite na aba Pedidos">🔒</span>`:`<button class="btn-del" data-edit="${l.id}" aria-label="Editar" style="color:var(--plum)">✎</button><button class="btn-del" data-del="${l.id}" aria-label="Remover">✕</button>`}
+      </div></div>`;
   }).join("");
   el.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{
     if(!confirm("Remover este lançamento?")) return;
     state.lancamentos = state.lancamentos.filter(l=>l.id!==b.dataset.del);
     salvar(); renderCaixa();
   }));
+  el.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>abrirEditarLanc(b.dataset.edit)));
+}
+function abrirEditarLanc(id){
+  const l = state.lancamentos.find(x=>x.id===id); if(!l) return;
+  const box=$("modalBox");
+  box.innerHTML=`
+    <h1 style="font-size:1.3rem;text-align:left">Editar despesa</h1>
+    <div style="text-align:left">
+      <div class="row">
+        <div class="field"><label>Fixo ou variável</label><select id="edFixoVar"><option ${l.fixoVar==="Fixo"?"selected":""}>Fixo</option><option ${l.fixoVar==="Variável"?"selected":""}>Variável</option></select></div>
+        <div class="field"><label>Categoria</label><select id="edCat">${opcoesCategoria(l.categoria)}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Descrição</label><input type="text" id="edDesc" value="${esc(l.descricao)}"></div>
+        <div class="field prefix-wrap"><label>Valor</label><span class="prefix">R$</span><input type="number" id="edValor" min="0" step="0.01" value="${l.valor}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Data</label><input type="date" id="edData" value="${l.data}"></div>
+        <div class="field"><label>Forma</label><select id="edForma">${FORMAS_PGTO.map(f=>`<option ${l.forma===f?"selected":""}>${f}</option>`).join("")}</select></div>
+      </div>
+    </div>
+    <button class="btn" id="edSalvar" style="margin-top:8px">Salvar alterações</button>
+    <button class="btn-small" id="edCancela" style="width:100%;margin-top:8px">Cancelar</button>`;
+  $("modalOverlay").classList.remove("hidden");
+  $("edCancela").addEventListener("click",()=>$("modalOverlay").classList.add("hidden"));
+  $("edSalvar").addEventListener("click",()=>{
+    const v=parseFloat(String($("edValor").value).replace(",","."))||0;
+    const desc=$("edDesc").value.trim();
+    if(v<=0||!desc){ toast("Preencha valor e descrição"); return; }
+    l.fixoVar=$("edFixoVar").value; l.categoria=$("edCat").value; l.descricao=desc;
+    l.valor=v; l.data=$("edData").value; l.forma=$("edForma").value;
+    salvar(); $("modalOverlay").classList.add("hidden"); toast("Despesa atualizada!"); renderCaixa();
+  });
 }
 
 // ================= CRM =================
@@ -582,7 +668,7 @@ function pintaListaCli(){
   $("cliCount").textContent = state.clientes.length;
   if(!state.clientes.length){ el.innerHTML=`<div class="empty">Nenhum cliente ainda.</div>`; return; }
   el.innerHTML = state.clientes.map(c=>{
-    const gasto = state.lancamentos.filter(l=>l.clienteId===c.id&&l.tipo==="Receita").reduce((s,l)=>s+(l.valor||0),0);
+    const gasto = state.pedidos.filter(ped=>ped.clienteId===c.id&&ped.status==="Pago").reduce((s,ped)=>s+calcPedido(ped).total,0);
     return `<div class="list-item">
       <div><div class="li-name">${esc(c.nome)}</div>
         <div class="li-detail">${[c.telefone,c.cidade].filter(Boolean).map(esc).join(" · ")||"sem contato"}${gasto>0?" · já gastou "+brl(gasto):""}</div></div>
@@ -593,6 +679,122 @@ function pintaListaCli(){
     state.clientes = state.clientes.filter(c=>c.id!==b.dataset.del);
     salvar(); pintaListaCli();
   }));
+}
+
+// ================= PEDIDOS =================
+function calcPedido(ped){
+  const p = state.produtos.find(x=>x.id===ped.produtoId);
+  let precoUnit = 0;
+  if(p){ const r=calcProduto(p); precoUnit=r.preco; }
+  const bruto = precoUnit * (ped.qtd||0);
+  const desconto = bruto * (ped.descontoPct||0)/100;
+  const frete = ped.frete||0;
+  const total = bruto - desconto + frete;
+  return { p, precoUnit, bruto, desconto, frete, total };
+}
+function renderPedidos(){
+  const el=$("panel-pedidos");
+  const prodOpts = state.produtos.filter(p=>casaCategoria(p.categoria)).map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("");
+  const cliOpts = state.clientes.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join("");
+  el.innerHTML=`
+    <h2>Pedidos</h2>
+    <p class="sub">Cada pedido pago vira receita no Caixa automaticamente.</p>
+    <div class="card">
+      <h3>Novo pedido</h3>
+      <div class="row">
+        <div class="field"><label>Cliente</label><select id="pedCli"><option value="">Escolha…</option>${cliOpts}</select></div>
+        <div class="field"><label>Produto</label><select id="pedProd"><option value="">Escolha…</option>${prodOpts}</select></div>
+      </div>
+      <div class="row">
+        <div class="field suffix-wrap"><label>Quantidade</label><span class="suffix">un</span><input type="number" id="pedQtd" min="1" step="1" value="1" inputmode="numeric"></div>
+        <div class="field suffix-wrap"><label>Desconto</label><span class="suffix">%</span><input type="number" id="pedDesc" min="0" max="100" step="1" value="0" inputmode="decimal"></div>
+        <div class="field prefix-wrap"><label>Entrega/frete</label><span class="prefix">R$</span><input type="number" id="pedFrete" min="0" step="0.5" value="0" inputmode="decimal"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Forma de pagamento</label><select id="pedForma">${FORMAS_PGTO.map(f=>`<option>${f}</option>`).join("")}</select></div>
+        <div class="field"><label>Data</label><input type="date" id="pedData" value="${hoje()}"></div>
+      </div>
+      <div class="chips" id="pedResumo"></div>
+      <button class="btn" id="btnAddPed" style="margin-top:10px">Registrar pedido</button>
+    </div>
+    <div class="card"><h3>Pedidos</h3><div id="listaPed"></div></div>`;
+  const atualizaResumo=()=>{
+    const pid=$("pedProd").value;
+    const ped={produtoId:pid,qtd:num($("pedQtd")),descontoPct:num($("pedDesc")),frete:num($("pedFrete"))};
+    const c=calcPedido(ped);
+    $("pedResumo").innerHTML = (c.p&&ped.qtd>0)
+      ? `<span class="chip">${esc(c.p.nome)}: ${brl(c.precoUnit)} × ${ped.qtd}</span>${c.desconto>0?`<span class="chip red">− ${brl(c.desconto)} desc.</span>`:""}${c.frete>0?`<span class="chip">+ ${brl(c.frete)} frete</span>`:""}<span class="chip amber">Total: <strong>${brl(c.total)}</strong></span>`
+      : "";
+  };
+  ["pedProd","pedQtd","pedDesc","pedFrete"].forEach(id=>$(id).addEventListener("input",atualizaResumo));
+  $("pedProd").addEventListener("change",atualizaResumo);
+  $("btnAddPed").addEventListener("click", ()=>{
+    const cliId=$("pedCli").value, prodId=$("pedProd").value, qtd=num($("pedQtd"));
+    if(!cliId){ toast("Escolha o cliente"); return; }
+    if(!prodId){ toast("Escolha o produto"); return; }
+    if(qtd<=0){ toast("Quantidade inválida"); return; }
+    state.pedidos.unshift({
+      id:uid(), num:state.proxNum.pedido++, data:$("pedData").value||hoje(),
+      clienteId:cliId, produtoId:prodId, qtd, descontoPct:num($("pedDesc")),
+      frete:num($("pedFrete")), forma:$("pedForma").value, status:"Pendente", lancId:null
+    });
+    salvar(); toast("Pedido registrado!"); renderPedidos();
+  });
+  pintaListaPed();
+}
+function pintaListaPed(){
+  const el=$("listaPed"); if(!el) return;
+  // pedidos cuja categoria do produto casa com o filtro
+  const lista = state.pedidos.filter(ped=>{
+    const p=state.produtos.find(x=>x.id===ped.produtoId);
+    return p?casaCategoria(p.categoria):true;
+  });
+  if(!lista.length){ el.innerHTML=`<div class="empty">Nenhum pedido ainda.</div>`; return; }
+  el.innerHTML = lista.map(ped=>{
+    const c=calcPedido(ped);
+    const cli=state.clientes.find(x=>x.id===ped.clienteId);
+    const d=new Date(ped.data+"T12:00").toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"});
+    const pago = ped.status==="Pago";
+    return `<div class="list-item">
+      <div><div class="li-name">#${String(ped.num).padStart(3,"0")} · ${esc(cli?cli.nome:"?")}</div>
+        <div class="li-detail">${esc(c.p?c.p.nome:"?")} × ${ped.qtd} · ${d} · ${esc(ped.forma)}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="li-value">${brl(c.total)}</span>
+        <button class="btn-small" data-toggle="${ped.id}" style="background:${pago?"var(--green-soft)":"var(--amber-soft)"};color:${pago?"#1d553e":"#8a5d12"}">${pago?"✓ Pago":"Marcar pago"}</button>
+        <button class="btn-del" data-del="${ped.id}" aria-label="Remover">✕</button>
+      </div></div>`;
+  }).join("");
+  el.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",()=>alternarPago(b.dataset.toggle)));
+  el.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{
+    if(!confirm("Remover este pedido? Se já estava pago, a receita também sai do caixa.")) return;
+    const ped=state.pedidos.find(x=>x.id===b.dataset.del);
+    if(ped&&ped.lancId) state.lancamentos=state.lancamentos.filter(l=>l.id!==ped.lancId);
+    state.pedidos=state.pedidos.filter(x=>x.id!==b.dataset.del);
+    salvar(); renderPedidos();
+  }));
+}
+function alternarPago(id){
+  const ped=state.pedidos.find(x=>x.id===id); if(!ped) return;
+  if(ped.status==="Pago"){
+    // desmarca: remove a receita do caixa
+    ped.status="Pendente";
+    if(ped.lancId){ state.lancamentos=state.lancamentos.filter(l=>l.id!==ped.lancId); ped.lancId=null; }
+    toast("Pedido voltou a pendente");
+  } else {
+    // marca pago: cria a receita no caixa
+    const c=calcPedido(ped);
+    const cli=state.clientes.find(x=>x.id===ped.clienteId);
+    const lancId=uid();
+    state.lancamentos.unshift({
+      id:lancId, num:state.proxNum.lanc++, data:ped.data,
+      tipo:"Receita", fixoVar:"Variável", categoria:(c.p?c.p.categoria:state.categorias[0]),
+      descricao:`Pedido #${String(ped.num).padStart(3,"0")} — ${c.p?c.p.nome:""} (${cli?cli.nome:""})`,
+      forma:ped.forma, valor:c.total, origem:"pedido", pedidoId:ped.id, status:"Pago"
+    });
+    ped.status="Pago"; ped.lancId=lancId;
+    toast("Pedido pago — receita lançada no caixa!");
+  }
+  salvar(); renderPedidos();
 }
 
 // ================= METAS =================
