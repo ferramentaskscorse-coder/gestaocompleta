@@ -522,7 +522,7 @@ function htmlPacotes(p, r){
         <span class="li-value">${brl(total)}</span>
         <button class="btn-del" data-pac-del="${idx}" aria-label="Remover pacote">✕</button></div></div>`;
   }).join("");
-  return `<details class="adv" style="margin-top:12px">
+  return `<details class="adv" style="margin-top:12px" data-pacotes${p._pacAberto?" open":""}>
     <summary>📦 Pacotes (vender em quantidade)</summary>
     <p class="hint" style="margin-top:10px">Monte pacotes prontos. Ex: "Caixa 20un". O preço sai do preço por unidade acima.</p>
     ${linhas||`<p class="hint">Nenhum pacote ainda.</p>`}
@@ -563,18 +563,21 @@ function bindProduto(p){
     const l=q(".price-tag .pt-line"); if(l) l.innerHTML=`Custo${r.rend>1?"/un":""}: <strong style="color:#FFD58A">${brl(r.rend>1?r.custoUnit:r.custoTotal)}</strong> · Sobra${r.rend>1?"/un":""}: <strong>${brl(r.rend>1?r.lucroUnit:(r.preco-r.custoTotal))}</strong>`;
   }
   // pacotes
+  const detalhes=q("[data-pacotes]");
+  if(detalhes) detalhes.addEventListener("toggle",()=>{ p._pacAberto=detalhes.open; });
   const pacAdd=q("[data-pac-add]");
   if(pacAdd) pacAdd.addEventListener("click",()=>{
     const nome=q("[data-pac-nome]").value.trim();
     const qtd=num(q("[data-pac-qtd]"));
     if(!nome||qtd<=0){ toast("Preencha o nome e a quantidade do pacote"); return; }
     p.pacotes=p.pacotes||[]; p.pacotes.push({id:uid(),nome,qtd});
-    rerender();
+    p._pacAberto=true; rerender();
   });
   qa("[data-pac-del]").forEach(b=>b.addEventListener("click",()=>{
-    const i=+b.dataset.pacDel; p.pacotes.splice(i,1); rerender();
+    const i=+b.dataset.pacDel; p.pacotes.splice(i,1); p._pacAberto=true; rerender();
   }));
-  qa("input,select").forEach(inp=>inp.addEventListener("blur",()=>pintaListaProd()));
+  // só os campos do bloco principal redesenham ao sair; os do pacote não
+  qa("input:not([data-pac-nome]):not([data-pac-qtd]),select").forEach(inp=>inp.addEventListener("blur",()=>pintaListaProd()));
 }
 
 // ================= ITENS (resumo dos produtos) =================
