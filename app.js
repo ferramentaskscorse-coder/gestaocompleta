@@ -200,7 +200,7 @@ document.addEventListener("click", e=>{
 function renderTudo(){
   renderCatFilter();
   const ativo = document.querySelector(".tab-btn.active");
-  renderPainelAtivo(ativo?ativo.dataset.panel:"painel");
+  renderPainelAtivo(ativo?ativo.dataset.panel:"caixa");
 }
 
 // ================= PAINEL =================
