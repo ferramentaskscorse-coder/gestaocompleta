@@ -8,7 +8,7 @@
 function estadoInicial(){
   return {
     categorias: ["Geral"],                 // negócios/categorias (marcador transversal)
-    config: { horasDia:8, diasMes:22 },    // base do valor da hora
+    config: { horasDia:8, diasMes:22, medidas:{ xicara:240, csopa:15, ccha:5 } },    // base do valor da hora
     materiais: [],   // {id, nome, categoria, precoEmb, qtdEmb, unidade}
     produtos: [],    // {id, nome, categoria, tempo, rendimento, taxaCartao, taxaImposto, margem, markup, materiais:[{matId,qtd}], pacotes:[{id,nome,qtd}]}
     clientes: [],    // {id, nome, telefone, email, cidade, status, obs, criadoEm}
@@ -72,12 +72,27 @@ function custoUnitMaterial(m){
 }
 function unidadeBase(m){ const u=UNIDADES[m.unidade]||UNIDADES.un; return NOME_BASE[u.base]; }
 
+// medidas caseiras — o peso de cada uma vem dos Ajustes (personalizável)
+const MEDIDA_LABEL = { xicara:"xícara(s)", csopa:"colher(es) de sopa", ccha:"colher(es) de chá" };
+function pesoMedida(med){
+  const m = (state.config && state.config.medidas) || {};
+  const padrao = { xicara:240, csopa:15, ccha:5 };
+  return m[med] || padrao[med] || 1;
+}
+// converte a quantidade informada (na medida escolhida) pra unidade base do material
+function qtdEmBase(mm, m){
+  const q = mm.qtd||0;
+  const med = mm.medida||"base";
+  if(med==="base") return q;                  // já está em g/ml/un
+  return q * pesoMedida(med);                  // ex: 3 xícaras * 240 = 720g
+}
+
 // preço de um produto/procedimento — espelha colunas P..Y da planilha
 function calcProduto(p){
   let custoMat = 0;
   (p.materiais||[]).forEach(mm=>{
     const m = state.materiais.find(x=>x.id===mm.matId);
-    if(m) custoMat += custoUnitMaterial(m) * (mm.qtd||0);
+    if(m) custoMat += custoUnitMaterial(m) * qtdEmBase(mm, m);
   });
   const vh = valorHora();
   const maoObra = vh * ((p.tempo||0)/60);                       // S = hora * (min/60)
@@ -448,10 +463,18 @@ function htmlProduto(p){
     .map(m=>`<option value="${m.id}">${esc(m.nome)}</option>`).join("");
   const matRows = (p.materiais||[]).map((mm,idx)=>{
     const m = state.materiais.find(x=>x.id===mm.matId); const ub = m?unidadeBase(m):"";
+    const med = mm.medida||"base";
+    // só faz sentido oferecer medida caseira pra ingredientes em peso/volume
+    const baseM = m?(UNIDADES[m.unidade]||UNIDADES.un).base:"un";
+    const permiteCaseira = baseM==="g"||baseM==="ml";
+    const medOpts = `<option value="base"${med==="base"?" selected":""}>${ub||"un"}</option>` +
+      (permiteCaseira?Object.entries(MEDIDA_LABEL).map(([k,label])=>`<option value="${k}"${med===k?" selected":""}>${label}</option>`).join(""):"");
+    const convertido = (m && med!=="base") ? `<span class="mat-unit" style="min-width:auto">= ${Math.round(qtdEmBase(mm,m))}${ub}</span>` : "";
     return `<div class="mat-row">
       <select data-mat-sel="${idx}" aria-label="Material">${`<option value="">Escolha…</option>`+opts}</select>
-      <input type="number" min="0" step="0.01" inputmode="decimal" placeholder="Qtd" value="${mm.qtd??""}" data-mat-qtd="${idx}">
-      <span class="mat-unit">${ub}</span>
+      <input type="number" min="0" step="0.01" inputmode="decimal" placeholder="Qtd" value="${mm.qtd??""}" data-mat-qtd="${idx}" style="flex:.8">
+      <select data-mat-med="${idx}" aria-label="Medida" style="flex:1.3">${medOpts}</select>
+      ${convertido}
       <button class="btn-del" data-mat-del="${idx}" aria-label="Remover">✕</button></div>`;
   }).join("");
 
@@ -555,6 +578,8 @@ function bindProduto(p){
     sel.addEventListener("change",()=>{ p.materiais[i].matId=sel.value; rerender(); }); });
   qa("[data-mat-qtd]").forEach(inp=>{ const i=+inp.dataset.matQtd;
     inp.addEventListener("input",()=>{ p.materiais[i].qtd=num(inp); salvar(); refresh(); }); });
+  qa("[data-mat-med]").forEach(sel=>{ const i=+sel.dataset.matMed;
+    sel.addEventListener("change",()=>{ p.materiais[i].medida=sel.value; rerender(); }); });
   qa("[data-mat-del]").forEach(b=>{ const i=+b.dataset.matDel;
     b.addEventListener("click",()=>{ p.materiais.splice(i,1); rerender(); }); });
   function refresh(){
@@ -949,13 +974,31 @@ function renderConfig(){
         <span class="chip">Despesa do mês: <strong>${brl(despesaMes(new Date().getFullYear(),new Date().getMonth()))}</strong></span></div>
     </div>
     <div class="card">
+      <h3>Medidas caseiras<span class="info-tip"><button type="button" class="tip-btn" aria-label="ajuda">?</button><span class="tip-box" role="tooltip">Quando você monta uma receita, pode informar a quantidade em xícaras ou colheres. Aqui você define quanto cada uma pesa, pra ficar igual à medida que você usa na sua cozinha.</span></span></h3>
+      <p class="hint">Usado nas receitas pra converter xícaras e colheres em gramas. Ajuste pra sua medida.</p>
+      <div class="row">
+        <div class="field suffix-wrap"><label>1 xícara</label><span class="suffix">g</span><input type="number" id="cfgXicara" min="1" step="1" value="${(state.config.medidas&&state.config.medidas.xicara)||240}"></div>
+        <div class="field suffix-wrap"><label>1 colher de sopa</label><span class="suffix">g</span><input type="number" id="cfgCsopa" min="1" step="1" value="${(state.config.medidas&&state.config.medidas.csopa)||15}"></div>
+        <div class="field suffix-wrap"><label>1 colher de chá</label><span class="suffix">g</span><input type="number" id="cfgCcha" min="1" step="1" value="${(state.config.medidas&&state.config.medidas.ccha)||5}"></div>
+      </div>
+    </div>
+    <div class="card">
       <h3>Backup dos dados</h3>
       <p class="hint">Seus dados já ficam salvos na nuvem. Mas você pode baixar uma cópia de segurança.</p>
       <button class="btn-small" id="btnBackup2">Baixar cópia</button>
       <button class="btn-small" id="btnRestore2">Restaurar cópia</button>
     </div>`;
+  function setMedida(id, chave, padrao){
+    $(id).addEventListener("input",e=>{
+      if(!state.config.medidas) state.config.medidas={xicara:240,csopa:15,ccha:5};
+      state.config.medidas[chave]=num(e.target)||padrao; salvar();
+    });
+  }
   $("cfgHoras").addEventListener("input",e=>{ state.config.horasDia=num(e.target)||8; salvar(); renderConfig(); });
   $("cfgDias").addEventListener("input",e=>{ state.config.diasMes=num(e.target)||22; salvar(); renderConfig(); });
+  setMedida("cfgXicara","xicara",240);
+  setMedida("cfgCsopa","csopa",15);
+  setMedida("cfgCcha","ccha",5);
   $("btnBackup2").addEventListener("click", baixarBackup);
   $("btnRestore2").addEventListener("click", ()=>$("fileImport").click());
 }
@@ -1123,6 +1166,8 @@ window.appAoEntrar=(user,dados)=>{
   state=estadoInicial();
   if(dados) state=Object.assign(state,dados);
   if(!state.categorias||!state.categorias.length) state.categorias=["Geral"];
+  if(!state.config) state.config={horasDia:8,diasMes:22,medidas:{xicara:240,csopa:15,ccha:5}};
+  if(!state.config.medidas) state.config.medidas={xicara:240,csopa:15,ccha:5};
   $("authOverlay").classList.add("hidden");
   $("btnSair").style.display="";
   $("userInfo").textContent=identificaUsuario(user);
