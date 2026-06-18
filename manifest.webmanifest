@@ -1,7 +1,7 @@
 {
-  "name": "Gestão Completa",
-  "short_name": "Gestão",
-  "description": "Preços, caixa, clientes e metas — tudo num lugar",
+  "name": "Próspera",
+  "short_name": "Próspera",
+  "description": "Feito pra dona do negócio — preços, caixa, clientes e metas",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
