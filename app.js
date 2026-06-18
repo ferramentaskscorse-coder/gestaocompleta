@@ -127,6 +127,13 @@ function renderPainelAtivo(panel){
 function renderCatFilter(){
   const sel = $("catGlobal");
   const atual = sel.value || "__all__";
+  const label = document.querySelector(".cat-filter label");
+  // com só uma categoria, o seletor não tem função: esconde o seletor e o
+  // rótulo, mas mantém o botão "Gerenciar" pra pessoa poder criar mais
+  const soUma = state.categorias.length <= 1;
+  sel.style.display = soUma ? "none" : "";
+  if(label) label.style.display = soUma ? "none" : "";
+  if(soUma){ catAtiva = "__all__"; return; }
   sel.innerHTML = `<option value="__all__">Todos</option>` +
     state.categorias.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
   sel.value = state.categorias.includes(atual)||atual==="__all__" ? atual : "__all__";
@@ -832,9 +839,16 @@ window.appAoEntrar=(user,dados)=>{
   if(!state.categorias||!state.categorias.length) state.categorias=["Geral"];
   $("authOverlay").classList.add("hidden");
   $("btnSair").style.display="";
-  $("userInfo").textContent=(user.displayName||user.email||"").split(" ")[0];
+  $("userInfo").textContent=identificaUsuario(user);
   renderTudo();
 };
+// identifica quem está logado: usa o trecho antes do @ do e-mail (mais
+// estável), e cai pro nome só se não houver e-mail
+function identificaUsuario(user){
+  if(user.email && user.email.includes("@")) return user.email.split("@")[0];
+  if(user.displayName) return user.displayName;
+  return "";
+}
 window.appAoSair=()=>{ state=estadoInicial(); $("authOverlay").classList.remove("hidden"); $("btnSair").style.display="none"; $("userInfo").textContent=""; };
 window.mostrarAvisoConfig=()=>{ $("authMsg").innerHTML="<b>Falta um passo:</b> cole a configuração do Firebase no arquivo cloud.js (procure por COLE_AQUI)."; };
 $("btnEntrar").addEventListener("click",()=>{ if(window.cloudLogin) window.cloudLogin(); else toast("Configure o Firebase primeiro"); });
