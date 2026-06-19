@@ -43,13 +43,29 @@ header{background:var(--plum-deep);color:#fff;padding:12px 16px;position:sticky;
 .cat-filter select{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:5px 10px;font-weight:700;font-size:.85rem}
 .cat-filter select option{color:var(--ink)}
 
-nav.tabs{max-width:920px;margin:14px auto 0;padding:0 16px;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
-nav.tabs::-webkit-scrollbar{display:none}
-.tab-btn{background:var(--card);border:2px solid var(--line);border-radius:var(--radius);padding:10px 14px;color:var(--ink-soft);font-weight:700;font-size:.85rem;transition:border-color .15s,color .15s;flex:0 0 auto;white-space:nowrap;display:flex;align-items:center;gap:6px}
-.tab-btn .ico{font-size:1.05rem}
-.tab-btn.active{border-color:var(--plum);color:var(--plum)}
+/* layout com menu lateral */
+.layout{max-width:1100px;margin:0 auto;display:flex;gap:0}
+.sidebar{flex:0 0 210px;padding:16px 12px}
+.sidebar nav.tabs{display:flex;flex-direction:column;gap:6px}
+.tab-btn{background:var(--card);border:2px solid var(--line);border-radius:var(--radius);padding:11px 14px;color:var(--ink-soft);font-weight:700;font-size:.9rem;transition:border-color .15s,color .15s,background .15s;display:flex;align-items:center;gap:10px;text-align:left;width:100%}
+.tab-btn .ico{font-size:1.15rem}
+.tab-btn:hover{border-color:var(--mauve)}
+.tab-btn.active{border-color:var(--plum);color:var(--plum);background:var(--blush)}
+.sidebar-overlay{display:none}
+#btnMenu{display:none}
+main{flex:1;min-width:0;padding:18px 16px 90px}
 
-main{max-width:920px;margin:0 auto;padding:18px 16px 90px}
+/* celular: sidebar vira gaveta deslizante */
+@media (max-width:760px){
+  #btnMenu{display:inline-block}
+  .layout{display:block}
+  .sidebar{position:fixed;top:0;left:0;height:100%;width:230px;background:var(--paper);
+    z-index:120;transform:translateX(-105%);transition:transform .25s;box-shadow:2px 0 16px rgba(74,29,61,.18);
+    padding-top:18px;overflow-y:auto}
+  .sidebar.open{transform:translateX(0)}
+  .sidebar-overlay.show{display:block;position:fixed;inset:0;background:rgba(42,27,40,.45);z-index:110}
+  main{padding:18px 16px 90px}
+}
 .panel{display:none}
 .panel.active{display:block}
 h2{font-family:var(--font-display);font-weight:800;font-size:1.35rem;letter-spacing:-.02em;margin-bottom:4px}
@@ -173,12 +189,15 @@ details.adv summary{cursor:pointer;font-weight:700;font-size:.85rem;color:var(--
 
 <header>
   <div class="header-inner">
-    <div class="logo">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M3 11.5V4a1 1 0 0 1 1-1h7.5a2 2 0 0 1 1.4.6l7.5 7.5a2 2 0 0 1 0 2.8l-6.5 6.5a2 2 0 0 1-2.8 0l-7.5-7.5A2 2 0 0 1 3 11.5Z" stroke="#FFD58A" stroke-width="2"/>
-        <circle cx="8" cy="8" r="1.6" fill="#FFD58A"/>
-      </svg>
-      Próspera
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="btn-ghost" id="btnMenu" aria-label="Abrir menu" style="font-size:1.1rem;padding:6px 11px">☰</button>
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 11.5V4a1 1 0 0 1 1-1h7.5a2 2 0 0 1 1.4.6l7.5 7.5a2 2 0 0 1 0 2.8l-6.5 6.5a2 2 0 0 1-2.8 0l-7.5-7.5A2 2 0 0 1 3 11.5Z" stroke="#FFD58A" stroke-width="2"/>
+          <circle cx="8" cy="8" r="1.6" fill="#FFD58A"/>
+        </svg>
+        Próspera
+      </div>
     </div>
     <div class="header-actions">
       <span id="userInfo"></span>
@@ -197,19 +216,23 @@ details.adv summary{cursor:pointer;font-weight:700;font-size:.85rem;color:var(--
   </div>
 </div>
 
-<nav class="tabs" aria-label="Seções">
-  <button class="tab-btn active" data-panel="caixa"><span class="ico">💰</span>Caixa</button>
-  <button class="tab-btn" data-panel="materiais"><span class="ico">📦</span>Materiais</button>
-  <button class="tab-btn" data-panel="precos"><span class="ico">🏷️</span>Preços</button>
-  <button class="tab-btn" data-panel="produtos"><span class="ico">📋</span>Itens</button>
-  <button class="tab-btn" data-panel="crm"><span class="ico">👥</span>Clientes</button>
-  <button class="tab-btn" data-panel="pedidos"><span class="ico">🛒</span>Pedidos</button>
-  <button class="tab-btn" data-panel="metas"><span class="ico">🎯</span>Metas</button>
-  <button class="tab-btn" data-panel="painel"><span class="ico">📈</span>Painel</button>
-  <button class="tab-btn" data-panel="config"><span class="ico">⚙️</span>Ajustes</button>
-</nav>
+<div class="layout">
+  <aside class="sidebar" id="sidebar" aria-label="Menu de navegação">
+    <nav class="tabs">
+      <button class="tab-btn active" data-panel="caixa"><span class="ico">💰</span>Caixa</button>
+      <button class="tab-btn" data-panel="materiais"><span class="ico">📦</span>Materiais</button>
+      <button class="tab-btn" data-panel="precos"><span class="ico">🏷️</span>Preços</button>
+      <button class="tab-btn" data-panel="produtos"><span class="ico">📋</span>Itens</button>
+      <button class="tab-btn" data-panel="crm"><span class="ico">👥</span>Clientes</button>
+      <button class="tab-btn" data-panel="pedidos"><span class="ico">🛒</span>Pedidos</button>
+      <button class="tab-btn" data-panel="metas"><span class="ico">🎯</span>Metas</button>
+      <button class="tab-btn" data-panel="painel"><span class="ico">📈</span>Painel</button>
+      <button class="tab-btn" data-panel="config"><span class="ico">⚙️</span>Ajustes</button>
+    </nav>
+  </aside>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-<main>
+  <main>
   <section class="panel active" id="panel-caixa"></section>
   <section class="panel" id="panel-materiais"></section>
   <section class="panel" id="panel-precos"></section>
@@ -220,6 +243,7 @@ details.adv summary{cursor:pointer;font-weight:700;font-size:.85rem;color:var(--
   <section class="panel" id="panel-painel"></section>
   <section class="panel" id="panel-config"></section>
 </main>
+</div>
 
 <div class="overlay" id="authOverlay">
   <div class="welcome">

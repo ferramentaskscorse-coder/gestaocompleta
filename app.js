@@ -138,7 +138,13 @@ function irPara(panel){
   window.scrollTo({top:0});
   renderPainelAtivo(panel);
 }
-document.querySelectorAll(".tab-btn").forEach(b=>b.addEventListener("click",()=>irPara(b.dataset.panel)));
+document.querySelectorAll(".tab-btn").forEach(b=>b.addEventListener("click",()=>{ irPara(b.dataset.panel); fecharMenu(); }));
+
+// menu lateral (gaveta no celular)
+function abrirMenu(){ $("sidebar").classList.add("open"); $("sidebarOverlay").classList.add("show"); }
+function fecharMenu(){ $("sidebar").classList.remove("open"); $("sidebarOverlay").classList.remove("show"); }
+$("btnMenu").addEventListener("click", abrirMenu);
+$("sidebarOverlay").addEventListener("click", fecharMenu);
 
 function renderPainelAtivo(panel){
   ({painel:renderPainel, precos:renderPrecos, produtos:renderProdutos, materiais:renderMateriais,
