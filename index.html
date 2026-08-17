@@ -173,6 +173,8 @@ table.grade{width:100%;border-collapse:collapse;font-size:.85rem;min-width:520px
 .vrow-erro{border-color:var(--red);background:var(--red-soft)}
 .voice-live{min-height:64px;max-height:140px;overflow-y:auto;background:var(--blush);border-radius:10px;padding:10px 12px;font-size:.9rem;color:var(--plum-deep);margin:12px 0;text-align:left}
 
+#trialBar a{color:#3a2a05;text-decoration:underline;font-weight:800}
+.chip[data-add-meses]{cursor:pointer;border:none}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:999px;font-size:.86rem;font-weight:700;z-index:200;opacity:0;pointer-events:none;transition:opacity .25s}
 .toast.show{opacity:1}
 details.adv{margin-top:8px}
@@ -201,12 +203,15 @@ details.adv summary{cursor:pointer;font-weight:700;font-size:.85rem;color:var(--
     </div>
     <div class="header-actions">
       <span id="userInfo"></span>
+      <button class="btn-ghost" id="btnDona" style="display:none">👑 Clientes</button>
       <button class="btn-ghost" id="btnExport">Backup</button>
       <button class="btn-ghost" id="btnSair" style="display:none">Sair</button>
       <input type="file" id="fileImport" accept=".json" style="display:none">
     </div>
   </div>
 </header>
+
+<div id="trialBar" style="display:none;background:var(--amber);color:#3a2a05;text-align:center;padding:8px 16px;font-weight:700;font-size:.85rem"></div>
 
 <div class="cat-filter">
   <div class="cat-filter-inner">
@@ -252,6 +257,10 @@ details.adv summary{cursor:pointer;font-weight:700;font-size:.85rem;color:var(--
     <p id="authMsg">Entre com sua conta Google. Seus dados ficam salvos na nuvem, seguros e disponíveis em qualquer aparelho.</p>
     <button class="btn" id="btnEntrar">Entrar com Google</button>
   </div>
+</div>
+
+<div class="overlay hidden" id="acessoOverlay">
+  <div class="welcome" id="acessoBox"></div>
 </div>
 
 <div class="overlay hidden" id="modalOverlay">

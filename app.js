@@ -1168,26 +1168,139 @@ function confirmarVoz(){
 // ================= INICIALIZAÇÃO =================
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
 window.toastGlobal=toast;
-window.appAoEntrar=(user,dados)=>{
+let acessoAtual = null;
+window.appAoEntrar=(user,dados,acesso)=>{
+  acessoAtual = acesso || { tipo:"assinante", dona:false };
   state=estadoInicial();
   if(dados) state=Object.assign(state,dados);
   if(!state.categorias||!state.categorias.length) state.categorias=["Geral"];
   if(!state.config) state.config={horasDia:8,diasMes:22,medidas:{xicara:240,csopa:15,ccha:5}};
   if(!state.config.medidas) state.config.medidas={xicara:240,csopa:15,ccha:5};
   $("authOverlay").classList.add("hidden");
+  if($("acessoOverlay")) $("acessoOverlay").classList.add("hidden");
   $("btnSair").style.display="";
   $("userInfo").textContent=identificaUsuario(user);
+  if($("btnDona")) $("btnDona").style.display = acessoAtual.dona ? "" : "none";
+  renderFaixaTeste();
   renderTudo();
 };
-// identifica quem está logado: usa o trecho antes do @ do e-mail (mais
-// estável), e cai pro nome só se não houver e-mail
+function renderFaixaTeste(){
+  const faixa = $("trialBar"); if(!faixa) return;
+  if(acessoAtual && acessoAtual.tipo==="teste"){
+    const d = acessoAtual.diasRestantes;
+    faixa.style.display="";
+    faixa.innerHTML = `🎁 Teste grátis: ${d===1?"último dia!":"faltam "+d+" dias"}. `+
+      (window.LINK_KIWIFY && window.LINK_KIWIFY.startsWith("http")
+        ? `<a href="${window.LINK_KIWIFY}" target="_blank">Assinar agora</a>`
+        : `Assine pra continuar depois.`);
+  } else { faixa.style.display="none"; }
+}
 function identificaUsuario(user){
   if(user.email && user.email.includes("@")) return user.email.split("@")[0];
   if(user.displayName) return user.displayName;
   return "";
 }
-window.appAoSair=()=>{ state=estadoInicial(); $("authOverlay").classList.remove("hidden"); $("btnSair").style.display="none"; $("userInfo").textContent=""; };
+window.appAcessoNegado=(user, acesso)=>{
+  $("authOverlay").classList.add("hidden");
+  const ov=$("acessoOverlay"), box=$("acessoBox");
+  let titulo="Acesso encerrado", msg="";
+  if(acesso.tipo==="teste_expirado"){
+    titulo="Seu teste grátis terminou 🌱";
+    msg="Esperamos que você tenha curtido o Próspera! Pra continuar organizando seu negócio, é só assinar.";
+  } else if(acesso.tipo==="assinatura_expirada"){
+    titulo="Sua assinatura venceu";
+    msg="Renove pra voltar a usar o Próspera — seus dados estão guardadinhos.";
+  } else if(acesso.tipo==="bloqueado"){
+    titulo="Acesso indisponível";
+    msg="Houve um problema com seu acesso. Fale com a Karen pra resolver.";
+  }
+  const cta = (window.LINK_KIWIFY && window.LINK_KIWIFY.startsWith("http"))
+    ? `<a class="btn" href="${window.LINK_KIWIFY}" target="_blank" style="display:block;text-decoration:none;margin-bottom:8px">Assinar o Próspera</a>`
+    : `<p class="hint">Assinatura em breve. Fale com a Karen.</p>`;
+  box.innerHTML = `
+    <h1 style="font-size:1.4rem">${titulo}</h1>
+    <p>${msg}</p>
+    <p class="hint" style="margin-bottom:14px">Seus dados ficam salvos e voltam assim que você assinar.</p>
+    ${cta}
+    <button class="btn-small" id="btnSairNegado" style="width:100%;margin-top:8px">Sair</button>`;
+  ov.classList.remove("hidden");
+  $("btnSairNegado").addEventListener("click",()=>{ if(window.cloudLogout) window.cloudLogout(); });
+};
+window.appAoSair=()=>{
+  state=estadoInicial(); acessoAtual=null;
+  $("authOverlay").classList.remove("hidden");
+  if($("acessoOverlay")) $("acessoOverlay").classList.add("hidden");
+  $("btnSair").style.display="none"; $("userInfo").textContent="";
+  if($("btnDona")) $("btnDona").style.display="none";
+  const tb=$("trialBar"); if(tb) tb.style.display="none";
+};
 window.mostrarAvisoConfig=()=>{ $("authMsg").innerHTML="<b>Falta um passo:</b> cole a configuração do Firebase no arquivo cloud.js (procure por COLE_AQUI)."; };
+
+// ---------- Painel da dona: gerenciar assinantes ----------
+async function abrirPainelDona(){
+  const box=$("modalBox");
+  box.innerHTML=`<h1 style="font-size:1.3rem">Painel da dona 👑</h1>
+    <p>Libere e renove o acesso das suas clientes.</p>
+    <div id="donaLista" style="text-align:left;margin-bottom:14px"><p class="hint">Carregando…</p></div>
+    <div style="text-align:left;border-top:2px solid var(--line);padding-top:12px">
+      <h3 style="font-size:.95rem;margin-bottom:8px">Liberar / renovar cliente</h3>
+      <div class="field"><label>Email da cliente (conta Google dela)</label><input type="email" id="donaEmail" placeholder="cliente@gmail.com"></div>
+      <div class="row">
+        <div class="field"><label>Acesso até</label><input type="date" id="donaValidade"></div>
+        <div class="field"><label>Situação</label><select id="donaStatus"><option value="ativo">Ativa (paga)</option><option value="bloqueado">Bloquear</option></select></div>
+      </div>
+      <div class="chips" style="margin-bottom:10px">
+        <button class="chip" data-add-meses="1">+1 mês</button>
+        <button class="chip" data-add-meses="3">+3 meses</button>
+        <button class="chip" data-add-meses="12">+1 ano</button>
+      </div>
+      <button class="btn" id="donaSalvar">Salvar acesso</button>
+    </div>
+    <button class="btn-small" id="donaFechar" style="width:100%;margin-top:10px">Fechar</button>`;
+  $("modalOverlay").classList.remove("hidden");
+  // atalhos de data
+  box.querySelectorAll("[data-add-meses]").forEach(b=>b.addEventListener("click",()=>{
+    const m=+b.dataset.addMeses; const d=new Date(); d.setMonth(d.getMonth()+m);
+    $("donaValidade").value=d.toISOString().slice(0,10);
+  }));
+  $("donaFechar").addEventListener("click",()=>$("modalOverlay").classList.add("hidden"));
+  $("donaSalvar").addEventListener("click", async ()=>{
+    const email=$("donaEmail").value.trim();
+    const validade=$("donaValidade").value;
+    const status=$("donaStatus").value;
+    if(!email||!email.includes("@")){ toast("Informe o email da cliente"); return; }
+    if(status==="ativo" && !validade){ toast("Informe até quando o acesso vale"); return; }
+    const ok=await window.donaSalvarAssinante(email, validade, status);
+    if(ok){ toast("Acesso atualizado!"); pintarListaDona(); $("donaEmail").value=""; $("donaValidade").value=""; }
+  });
+  pintarListaDona();
+}
+async function pintarListaDona(){
+  const el=$("donaLista"); if(!el) return;
+  const lista=await window.donaListarAssinantes();
+  if(!lista||!lista.length){ el.innerHTML=`<div class="empty">Nenhuma cliente ainda. As que entrarem no teste aparecem aqui.</div>`; return; }
+  const hoje=new Date().toISOString().slice(0,10);
+  lista.sort((a,b)=>(a.email||"").localeCompare(b.email||""));
+  el.innerHTML=lista.map(a=>{
+    const venceu = a.validoAte && a.validoAte < hoje;
+    let tag="", cor="";
+    if(a.status==="bloqueado"){ tag="bloqueada"; cor="var(--red)"; }
+    else if(a.status==="teste"){ tag=venceu?"teste expirado":"em teste"; cor=venceu?"var(--red)":"var(--amber)"; }
+    else { tag=venceu?"vencida":"ativa"; cor=venceu?"var(--red)":"var(--green)"; }
+    const dt = a.validoAte ? new Date(a.validoAte+"T12:00").toLocaleDateString("pt-BR") : "—";
+    return `<div class="list-item">
+      <div><div class="li-name" style="font-size:.85rem">${esc(a.email)}</div>
+        <div class="li-detail">até ${dt} · <span style="color:${cor};font-weight:700">${tag}</span></div></div>
+      <button class="btn-small" data-renovar="${esc(a.email)}" data-validade="${a.validoAte||""}">Editar</button>
+    </div>`;
+  }).join("");
+  el.querySelectorAll("[data-renovar]").forEach(b=>b.addEventListener("click",()=>{
+    $("donaEmail").value=b.dataset.renovar;
+    $("donaValidade").value=b.dataset.validade||"";
+    $("donaEmail").scrollIntoView({behavior:"smooth"});
+  }));
+}
 $("btnEntrar").addEventListener("click",()=>{ if(window.cloudLogin) window.cloudLogin(); else toast("Configure o Firebase primeiro"); });
 $("btnSair").addEventListener("click",()=>{ if(window.cloudLogout) window.cloudLogout(); });
+if($("btnDona")) $("btnDona").addEventListener("click", abrirPainelDona);
 renderTudo();
