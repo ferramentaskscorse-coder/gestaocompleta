@@ -8,7 +8,8 @@
 function estadoInicial(){
   return {
     categorias: ["Geral"],                 // negócios/categorias (marcador transversal)
-    config: { horasDia:8, diasMes:22, medidas:{ xicara:240, csopa:15, ccha:5 } },    // base do valor da hora
+    config: { horasDia:8, diasMes:22, medidas:{ xicara:240, csopa:15, ccha:5 },
+      canais:[ {id:"direto",nome:"Direto",taxa:0}, {id:"99food",nome:"99food",taxa:12.1}, {id:"ifood",nome:"iFood",taxa:23} ] },    // base do valor da hora
     materiais: [],   // {id, nome, categoria, precoEmb, qtdEmb, unidade}
     produtos: [],    // {id, nome, categoria, tempo, rendimento, taxaCartao, taxaImposto, margem, markup, materiais:[{matId,qtd}], pacotes:[{id,nome,qtd}]}
     clientes: [],    // {id, nome, telefone, email, cidade, status, obs, criadoEm}
@@ -116,6 +117,20 @@ function calcProduto(p){
     precoUnit: preco/rend,
     lucroUnit: (preco-custoTotal)/rend
   };
+}
+
+// lista de canais configurados (com fallback)
+function getCanais(){
+  const c = state.config && state.config.canais;
+  if(c && c.length) return c;
+  return [{id:"direto",nome:"Direto",taxa:0},{id:"99food",nome:"99food",taxa:12.1},{id:"ifood",nome:"iFood",taxa:23}];
+}
+// Lógica A: pra receber o preço-base limpo, o preço no canal sobe pra cobrir a taxa
+// preço_canal = preço_base / (1 - taxa/100). A taxa incide sobre o preço de venda.
+function precoNoCanal(precoBase, taxaPct){
+  const t = (taxaPct||0)/100;
+  if(t >= 1) return precoBase;
+  return precoBase / (1 - t);
 }
 
 // agregados do fluxo respeitando o filtro de categoria
@@ -538,8 +553,33 @@ function htmlProduto(p){
     </div>
     ${barra}${legenda}
     ${r.vh<=0?`<div class="alert info">Dica: cadastre suas despesas na aba <b>Caixa</b> pra calcular o valor real da sua hora de trabalho.</div>`:""}
+    ${htmlCanais(p,r)}
     ${r.rend>1?htmlPacotes(p,r):""}
   </div>`;
+}
+// comparador de canais: mostra quanto cobrar em cada canal pra manter a mesma sobra
+function htmlCanais(p, r){
+  const canais = getCanais();
+  if(!canais.length) return "";
+  const base = r.rend>1 ? r.precoUnit : r.preco;   // preço-base limpo por unidade
+  const linhas = canais.map(c=>{
+    const preco = precoNoCanal(base, c.taxa);
+    const taxaReais = preco - base;
+    return `<tr>
+      <td><div class="li-name" style="font-size:.88rem">${esc(c.nome)}</div>
+        <div class="li-detail">${c.taxa>0?`taxa ${pct(c.taxa)} · você paga ${brl(taxaReais)}`:"sem taxa"}</div></td>
+      <td class="num"><b style="font-size:1.05rem;color:var(--plum)">${brl(preco)}</b></td>
+    </tr>`;
+  }).join("");
+  return `<details class="adv" style="margin-top:12px">
+    <summary>📲 Quanto cobrar em cada canal</summary>
+    <p class="hint" style="margin-top:10px">Pra você receber ${brl(base)} limpo${r.rend>1?" por unidade":""} em cada canal, cobrando o preço abaixo (a taxa já sai do preço).</p>
+    <div class="tabela-wrap"><table class="grade">
+      <thead><tr><th>Canal</th><th class="num">Preço de venda</th></tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>
+    <p class="hint" style="margin-top:8px">Edite os canais e taxas na aba <b>Ajustes</b>.</p>
+  </details>`;
 }
 function htmlPacotes(p, r){
   const pacotes = p.pacotes||[];
@@ -989,6 +1029,16 @@ function renderConfig(){
       </div>
     </div>
     <div class="card">
+      <h3>Canais de venda<span class="info-tip"><button type="button" class="tip-btn" aria-label="ajuda">?</button><span class="tip-box" role="tooltip">Cada canal (iFood, 99food, venda direta) cobra uma taxa. O sistema usa isso pra mostrar quanto cobrar em cada um mantendo seu lucro. A taxa sai do preço de venda.</span></span></h3>
+      <p class="hint">Onde você vende e a taxa de cada um. Aparece no comparador da tela de Preços.</p>
+      <div id="listaCanais"></div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="canalNome" placeholder="Nome (ex: Rappi)">
+        <div class="suffix-wrap"><span class="suffix">%</span><input type="number" id="canalTaxa" min="0" max="99" step="0.1" placeholder="taxa" inputmode="decimal"></div>
+        <button class="btn-small" id="btnAddCanal">+ Adicionar</button>
+      </div>
+    </div>
+    <div class="card">
       <h3>Backup dos dados</h3>
       <p class="hint">Seus dados já ficam salvos na nuvem. Mas você pode baixar uma cópia de segurança.</p>
       <button class="btn-small" id="btnBackup2">Baixar cópia</button>
@@ -1007,6 +1057,33 @@ function renderConfig(){
   setMedida("cfgCcha","ccha",5);
   $("btnBackup2").addEventListener("click", baixarBackup);
   $("btnRestore2").addEventListener("click", ()=>$("fileImport").click());
+  pintarCanais();
+  $("btnAddCanal").addEventListener("click", ()=>{
+    const nome=$("canalNome").value.trim(); const taxa=num($("canalTaxa"));
+    if(!nome){ toast("Dê um nome ao canal"); return; }
+    if(!state.config.canais) state.config.canais=[];
+    state.config.canais.push({id:uid(),nome,taxa});
+    salvar(); $("canalNome").value=""; $("canalTaxa").value=""; pintarCanais();
+  });
+}
+function pintarCanais(){
+  const el=$("listaCanais"); if(!el) return;
+  const canais=getCanais();
+  el.innerHTML=canais.map((c,i)=>`
+    <div class="list-item">
+      <div><div class="li-name">${esc(c.nome)}</div><div class="li-detail">taxa ${pct(c.taxa)}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="suffix-wrap" style="width:90px"><span class="suffix">%</span>
+          <input type="number" min="0" max="99" step="0.1" value="${c.taxa}" data-canal-taxa="${i}" style="padding:6px 30px 6px 8px"></div>
+        <button class="btn-del" data-canal-del="${i}" aria-label="Remover">✕</button>
+      </div>
+    </div>`).join("");
+  el.querySelectorAll("[data-canal-taxa]").forEach(inp=>inp.addEventListener("input",()=>{
+    const i=+inp.dataset.canalTaxa; state.config.canais[i].taxa=num(inp); salvar();
+  }));
+  el.querySelectorAll("[data-canal-del]").forEach(b=>b.addEventListener("click",()=>{
+    const i=+b.dataset.canalDel; state.config.canais.splice(i,1); salvar(); pintarCanais();
+  }));
 }
 
 // ================= BACKUP =================
@@ -1176,6 +1253,7 @@ window.appAoEntrar=(user,dados,acesso)=>{
   if(!state.categorias||!state.categorias.length) state.categorias=["Geral"];
   if(!state.config) state.config={horasDia:8,diasMes:22,medidas:{xicara:240,csopa:15,ccha:5}};
   if(!state.config.medidas) state.config.medidas={xicara:240,csopa:15,ccha:5};
+  if(!state.config.canais) state.config.canais=[{id:"direto",nome:"Direto",taxa:0},{id:"99food",nome:"99food",taxa:12.1},{id:"ifood",nome:"iFood",taxa:23}];
   $("authOverlay").classList.add("hidden");
   if($("acessoOverlay")) $("acessoOverlay").classList.add("hidden");
   $("btnSair").style.display="";
