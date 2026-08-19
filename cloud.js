@@ -81,13 +81,9 @@ if(FIREBASE_CONFIG.apiKey === "COLE_AQUI"){
       return { liberado:true, dona:false, tipo:"assinante", validoAte:a.validoAte };
     }
 
-    // primeira vez: cria o teste grátis
-    const fim = new Date(); fim.setDate(fim.getDate() + DIAS_TESTE);
-    const validoAte = fim.toISOString().slice(0,10);
-    try {
-      await setDoc(ref, { email, status:"teste", validoAte, inicioTeste:hojeISO(), criadoEm:new Date().toISOString() });
-    } catch(e){}
-    return { liberado:true, dona:false, tipo:"teste", validoAte, diasRestantes:DIAS_TESTE };
+    // email novo, fora da base: sem acesso (modelo "comprou, usa")
+    // não cria teste automático — só entra quem a dona liberar ou quem comprar
+    return { liberado:false, dona:false, tipo:"sem_acesso" };
   }
 
   // ---------- Painel da dona ----------

@@ -1204,7 +1204,10 @@ window.appAcessoNegado=(user, acesso)=>{
   $("authOverlay").classList.add("hidden");
   const ov=$("acessoOverlay"), box=$("acessoBox");
   let titulo="Acesso encerrado", msg="";
-  if(acesso.tipo==="teste_expirado"){
+  if(acesso.tipo==="sem_acesso"){
+    titulo="Este acesso é exclusivo pra assinantes 🔑";
+    msg="Garanta o seu! Assine o Próspera e comece a organizar seu negócio hoje mesmo.";
+  } else if(acesso.tipo==="teste_expirado"){
     titulo="Seu teste grátis terminou 🌱";
     msg="Esperamos que você tenha curtido o Próspera! Pra continuar organizando seu negócio, é só assinar.";
   } else if(acesso.tipo==="assinatura_expirada"){
